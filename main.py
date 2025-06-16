@@ -11,6 +11,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
+# ✅ Add root endpoint
+@app.get("/")
+async def root():
+    return {"message": "LumoChart backend is running 🎉"}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,8 +26,6 @@ app.add_middleware(
 # Models
 class PromptRequest(BaseModel):
     prompt: str
-
-from typing import Optional
 
 class Note(BaseModel):
     timestamp: str
@@ -37,7 +40,6 @@ class Note(BaseModel):
     summary: Optional[str] = None
     ownerId: Optional[str] = None
     patientID: Optional[str] = None
-
 
 # Endpoint: general-purpose summary
 @app.post("/generate-summary")
@@ -88,6 +90,7 @@ Notes:
         return {"summary": response.choices[0].message.content}
     except Exception as e:
         return {"error": str(e)}
+
 # Endpoint: hospital course summary
 @app.post("/generate-hospital-summary")
 async def generate_hospital_summary(notes: List[Note]):
