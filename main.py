@@ -11,7 +11,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
-# ✅ Add root endpoint
+# ✅ Root endpoint
 @app.get("/")
 async def root():
     return {"message": "LumoChart backend is running 🎉"}
@@ -125,7 +125,8 @@ Here are the progress notes:
     except Exception as e:
         print("❌ Hospital summary generation failed:", e)
         return {"error": str(e)}
-# Endpoint: generate MDM
+
+# ✅ Endpoint: MDM generator
 @app.post("/generate-mdm")
 async def generate_mdm(note: Note):
     try:
