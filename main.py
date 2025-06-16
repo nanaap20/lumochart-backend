@@ -125,3 +125,35 @@ Here are the progress notes:
     except Exception as e:
         print("❌ Hospital summary generation failed:", e)
         return {"error": str(e)}
+# Endpoint: generate MDM
+@app.post("/generate-mdm")
+async def generate_mdm(note: Note):
+    try:
+        clinical_context = f"""
+Patient Summary:
+- Timestamp: {note.timestamp}
+- HPI: {note.hpi or note.subjective or "N/A"}
+- Exam: {note.exam or "N/A"}
+- Labs/Imaging: {note.objective or "N/A"}
+- Assessment/Plan: {note.ap or "N/A"}
+
+Instructions:
+Generate a clear, medically sound Medical Decision Making (MDM) paragraph based on this clinical context. Include:
+- Summary of clinical problem(s)
+- Key findings (labs, imaging, vitals)
+- Differential diagnosis (if relevant)
+- Rationale for current treatment or interventions
+- Clinical risk assessment
+- Disposition reasoning (e.g., admit, discharge, observation)
+
+Respond in 1 paragraph.
+        """
+
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4",
+            messages=[{"role": "user", "content": clinical_context}],
+            temperature=0.3
+        )
+        return {"mdm": response.choices[0].message.content}
+    except Exception as e:
+        return {"error": str(e)}
