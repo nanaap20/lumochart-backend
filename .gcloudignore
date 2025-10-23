@@ -1,0 +1,9 @@
+
+# Default ignores
+.gcloudignore
+.git
+.gitignore
+
+# Allow the .env file and the service account key to be uploaded
+!service-account-key.json
+!.env
