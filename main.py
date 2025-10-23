@@ -50,13 +50,17 @@ client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # Initialize FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# ✅ Create the app instance BEFORE adding middleware
+app = FastAPI(title="LumoChart Backend", version="3.2")
+
 origins = [
-    "http://localhost:3000",                       # Local development
-    "https://chart.lumosyehealth.com",             # Your live web app
-    "https://lumochart-web-git-main-yaw-ansahs-projects.vercel.app",  # Vercel preview
-    "https://lumochart-backend-294915040412.us-central1.run.app",     # Optional self-allow
+    "http://localhost:3000",
+    "https://chart.lumosyehealth.com",
+    "https://lumochart-web-git-main-yaw-ansahs-projects.vercel.app",
+    "https://lumochart-backend-294915040412.us-central1.run.app",
 ]
 
 app.add_middleware(
