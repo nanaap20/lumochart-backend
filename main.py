@@ -49,20 +49,20 @@ bucket = storage.bucket()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-# Initialize FastAPI
-from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Create the app instance BEFORE adding middleware
-app = FastAPI(title="LumoChart Backend", version="3.2")
+# Initialize FastAPI app first
+app = FastAPI()
 
+# Define allowed origins for dev + production
 origins = [
     "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "https://chart.lumosyehealth.com",
-    "https://lumochart-web-git-main-yaw-ansahs-projects.vercel.app",
-    "https://lumochart-backend-294915040412.us-central1.run.app",
+    "https://www.lumosyehealth.com",
 ]
 
+# Add middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -70,6 +70,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 # ─────────────────────────────────────────────────────────────
