@@ -1,0 +1,29 @@
+steps:
+  # Step 1: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', '-t',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-staging/backend:latest',
+      '.'
+    ]
+
+  # Step 2: Push Docker image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'push',
+      'us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-staging/backend:latest'
+    ]
+
+  # Step 3: Deploy to Cloud Run (staging)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      [
+        'run', 'deploy', 'lumochart-backend-staging',
+        '--image=us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-staging/backend:latest',
+        '--region=us-central1',
+        '--allow-unauthenticated'
+      ]
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-staging/backend:latest'
