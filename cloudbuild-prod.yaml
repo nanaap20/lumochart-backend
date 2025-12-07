@@ -1,5 +1,5 @@
 steps:
-  # Step 1: Build Docker image (PROD)
+  # Step 1: Build Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build', '-t',
@@ -7,19 +7,19 @@ steps:
       '.'
     ]
 
-  # Step 2: Push Docker image to Artifact Registry (PROD)
+  # Step 2: Push Docker image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'push',
       'us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-prod/backend:latest'
     ]
 
-  # Step 3: Deploy to Cloud Run (PROD)
+  # Step 3: Deploy to Cloud Run (production)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: gcloud
     args:
       [
-        'run', 'deploy', 'lumochart-backend',
+        'run', 'deploy', 'lumochart-backend-prod',
         '--image=us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-prod/backend:latest',
         '--region=us-central1',
         '--allow-unauthenticated'
@@ -27,3 +27,6 @@ steps:
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/lumochart-backend-prod/backend:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
