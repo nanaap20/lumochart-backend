@@ -1278,24 +1278,27 @@ async def get_subscription_status(uid: str):
     return status
 
 
-# ─────────────────────────────────────────────
-# v2 TEST ENDPOINT (staging only)
-# ─────────────────────────────────────────────
-@v2.get("/ping")
-async def ping_v2():
-    return {"message": "v2 online ✔️"}
-
-
-# ─────────────────────────────────────────────
-# Attach versioned routers
-# ─────────────────────────────────────────────
-app.include_router(v1)
+# -------------------------------------------------
+# v1 ROUTES
+# -------------------------------------------------
 @v1.get("/health")
 async def health_v1():
     return {"status": "ok", "version": "v1"}
 
+# (all other v1 endpoints here)
 
-app.include_router(v2)
+# -------------------------------------------------
+# v2 ROUTES
+# -------------------------------------------------
 @v2.get("/health")
 async def health_v2():
     return {"status": "ok", "version": "v2"}
+
+# (all other v2 endpoints here)
+
+
+# -------------------------------------------------
+# MOUNT ROUTERS (must be last)
+# -------------------------------------------------
+app.include_router(v1)
+app.include_router(v2)
