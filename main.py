@@ -1,7 +1,7 @@
 # main.py — LumoChart Backend (v3.1 optimized)
 # Fast, accurate, and production-ready
 
-import os, io, uuid, json, asyncio
+import os, io, re, uuid, json, asyncio
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from enum import Enum
@@ -16,7 +16,7 @@ import firebase_admin
 from firebase_admin import storage, firestore
 import httpx
 
-from typing import List
+from typing import List, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
@@ -49,20 +49,26 @@ bucket = storage.bucket()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-# Initialize FastAPI app first
 app = FastAPI()
 
-# Define allowed origins for dev + production
+from subscriptions_main import router as subscriptions_router
+app.include_router(subscriptions_router)
+
+
+# ✅ Allowed origins (add both www and non-www)
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://chart.lumosyehealth.com",
     "https://www.lumosyehealth.com",
+    "https://lumosyehealth.com",
 ]
 
-# Add middleware
+# ✅ Apply CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -71,7 +77,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- ✅ Universal Preflight Handler (Google Cloud Run safe) ---
+from fastapi import Request
+from fastapi.responses import Response
 
+@app.options("/{rest_of_path:path}")
+async def universal_preflight(request: Request, rest_of_path: str):
+    origin = request.headers.get("origin", "*")
+    response = Response()
+    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 # ─────────────────────────────────────────────────────────────
 # DATA MODELS
@@ -177,6 +195,29 @@ class FormatHPIRequest(BaseModel):
 class FormatHPIResponse(BaseModel):
     formatted_hpi: str
 
+class GenerateHPIRequest(BaseModel):
+    # Match your NoteContext rawValue options
+    note_type: Literal[
+        "admission",
+        "progress",
+        "consult",
+        "outpatient",
+        "ed",
+        "bedside"
+    ]
+
+    # Raw context text from the note (HPI/ROS/PMH/etc.)
+    context: str
+
+    # NEW — Optional demographic enhancers
+    patient_name: Optional[str] = None
+    sex: Optional[str] = None  # "male", "female", etc.
+    age: Optional[int] = None
+
+
+class GenerateHPIResponse(BaseModel):
+    hpi: str
+
     
 # ─────────────────────────────────────────────────────────────
 # LOGGING
@@ -200,6 +241,46 @@ async def firestore_test():
     test_ref.set({"timestamp": datetime.utcnow().isoformat(), "message": "connected ✅"})
     doc = test_ref.get()
     return {"status": "ok", "data": doc.to_dict()}
+
+
+# ---------- Helper: map note_type -> style hint ----------
+
+def _hpi_style_for_note_type(note_type: str) -> str:
+    mapping = {
+        "admission": "inpatient hospital admission",
+        "progress": "inpatient daily progress note",
+        "consult": "inpatient consultation",
+        "outpatient": "outpatient clinic visit",
+        "ed": "emergency department encounter",
+        "bedside": "brief bedside update",
+    }
+    return mapping.get(note_type, "general medical encounter")
+
+
+# ---------- Helper: scrub headings / extra labels ----------
+
+_HPI_HEADING_PATTERN = re.compile(
+    r"^\s*(hpi|history of present illness)\s*[:\-–]\s*",
+    flags=re.IGNORECASE
+)
+
+def _clean_hpi_text(text: str) -> str:
+    t = text.strip()
+
+    # Drop "HPI:", "History of Present Illness:" heading if present
+    t = _HPI_HEADING_PATTERN.sub("", t).strip()
+
+    # Optionally strip obvious section labels if the model misbehaves
+    # e.g. "Assessment:", "Plan:", "ED Course:", etc.
+    # We *only* remove them if they appear as a standalone heading at the top.
+    for heading in ["Assessment", "Plan", "ED Course", "MDM", "Exam", "ROS"]:
+        pattern = re.compile(
+            rf"^\s*{heading}\s*[:\-–]\s*",
+            flags=re.IGNORECASE
+        )
+        t = pattern.sub("", t).strip()
+
+    return t
 
 
 # ─────────────────────────────────────────────────────────────
@@ -438,6 +519,128 @@ Context:
         raise HTTPException(500, f"Note generation failed: {e}")
 
 
+# ---------- HPI Generator Endpoint (Demographics-Aware, Improved) ----------
+
+@app.post("/generate-hpi", response_model=GenerateHPIResponse)
+async def generate_hpi(req: GenerateHPIRequest) -> GenerateHPIResponse:
+    """
+    Generate a narrative HPI from structured/context text.
+
+    NEW FEATURES:
+    • Uses demographics (name, age, sex) to build a natural first sentence.
+    • Automatically chooses Mr./Ms. if applicable.
+    • Falls back gracefully if some demographics are missing.
+    • Preserves all safety rules: NO plan, NO exam, NO disposition, NO hallucinated facts.
+    """
+
+    # --- Validate context ---
+    context = (req.context or "").strip()
+    if not context:
+        raise HTTPException(status_code=400, detail="Context is empty.")
+
+    style_hint = _hpi_style_for_note_type(req.note_type)
+
+    # --- Build demographic identity line ---
+    name = req.patient_name
+    age = req.age
+    sex = req.sex.lower() if req.sex else None
+
+    # Honorific (optional, inferred)
+    honorific = None
+    if sex:
+        if sex.startswith("m"): honorific = "Mr."
+        elif sex.startswith("f"): honorific = "Ms."
+
+    # Construct identity fragment
+    if name and age and sex:
+        identity = f"{honorific} {name} is a {age}-year-old {sex} patient"
+    elif age and sex:
+        identity = f"A {age}-year-old {sex} patient"
+    elif age:
+        identity = f"A {age}-year-old patient"
+    elif sex:
+        identity = f"A {sex} patient"
+    else:
+        identity = "The patient"
+
+    # --------------------------
+    # SYSTEM PROMPT (Upgraded)
+    # --------------------------
+    system_msg = f"""
+You are a medical documentation assistant who writes high-quality
+History of Present Illness (HPI) narratives for clinicians.
+
+SAFETY & RULES:
+• Use ONLY the clinical details explicitly present in the provided context.
+• DO NOT invent diagnoses, labs, imaging, PMH, treatments, or timelines.
+• DO NOT include exam findings, assessment, plan, differential, or disposition.
+• DO NOT mention your process, AI, reasoning, or limitations.
+• Do NOT include headings like "HPI:" or "History of Present Illness:".
+
+HPI STRUCTURE:
+• 1–3 concise narrative paragraphs.
+• Third-person clinical tone.
+• The FIRST SENTENCE MUST begin with:
+    “{identity} … who presents with …”
+  and should incorporate any PMH **only if explicitly present in context**.
+• Subsequent sentences should cover:
+    – onset
+    – duration
+    – location
+    – quality
+    – severity
+    – associated symptoms
+    – relevant negatives
+    – contextual events
+• If some details are missing, simply omit them (do not guess).
+
+The output must be ONLY the polished HPI text.
+"""
+
+    # --------------------------
+    # USER PROMPT
+    # --------------------------
+    user_msg = f"""
+NOTE TYPE: {style_hint}
+
+Using ONLY the information below, write the HPI as instructed.
+
+CONTEXT START
+{context}
+CONTEXT END
+"""
+
+    # --------------------------
+    # OpenAI Call
+    # --------------------------
+    try:
+        completion = await client.chat.completions.create(
+            model=os.getenv("OPENAI_HPI_MODEL", "gpt-4.1-mini"),
+            temperature=0.25,
+            max_tokens=600,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"OpenAI HPI generation failed: {e}"
+        )
+
+    raw = (completion.choices[0].message.content or "").strip()
+    cleaned = _clean_hpi_text(raw)
+
+    if not cleaned:
+        raise HTTPException(
+            status_code=500,
+            detail="Generated HPI was empty after cleaning."
+        )
+
+    return GenerateHPIResponse(hpi=cleaned)
+
+
 # ─────────────────────────────────────────────────────────────
 # Format HPI
 # ─────────────────────────────────────────────────────────────
@@ -555,7 +758,7 @@ async def generate_ed_summary(request: TranscriptionResponse):
 You are an experienced emergency medicine physician documenting an ED encounter.
 
 TASK:
-From the provided HPI, ROS, and Exam text, generate the following structured fields:
+From the provided HPI, ROS, and Exam text, generate the following structured JSON fields:
 
 {
   "assessment_and_plan": "...",
@@ -564,32 +767,47 @@ From the provided HPI, ROS, and Exam text, generate the following structured fie
   "billing_level_suggestion": "..."
 }
 
-FORMATTING & STYLE RULES:
-- The **Assessment & Plan** must be problem-based.
-  Example:
-  #1. Acute asthma exacerbation
-  • Start albuterol/ipratropium nebs q4h PRN
-  • Initiate oral prednisone 40 mg daily ×5d
-  • Monitor O₂ saturation; reassess in 2h
+ASSESSMENT & PLAN — REQUIRED FORMAT (strict):
+- Must be problem-based.
+- Each problem must start on its own line with:
+      #1 Diagnosis
+      #2 Next Diagnosis
+      #3 ...
+- Each problem must contain one or more plan bullet points, each on its own line:
+      - Plan item 1
+      - Plan item 2
+      - Plan item 3
+- ABSOLUTELY NO middle dots (•). Use hyphen-minus bullets only.
+- NO inline A&P. NO single-paragraph A&P. NO collapsing problems.
+- The structure **must look exactly like this**:
 
-  #2. Hypertension
-  • Resume home lisinopril 20 mg daily
-  • Follow-up with PCP within 1 week
+#1 Breakthrough seizure
+- Continue AED regimen
+- Neurology consult
+- Educate on seizure precautions
 
-- Use “•” bullets (middle dot) for plan items.
-- The **MDM** should be a concise, formal paragraph summarizing:
-  • the presenting problem(s),
-  • key differential diagnoses considered,
-  • diagnostics performed,
-  • and rationale for final disposition.
-- Ensure the first MDM sentence reads naturally in full narrative form:
-  “Mr./Ms. [Name] is a [Age]-year-old [sex] patient with a past medical history of X and Y **who presents with** [chief complaint].”
-- The **Disposition** must be one concise line: Admit, Discharge, or Observation + brief reason.
-  Example: “Discharge with inhaler education; stable on room air.”
-- The **Billing Level Suggestion** must be one of: 99283, 99284, 99285
-  (based on medical complexity, # of problems, and interventions).
-- Use concise, professional language.
-- Return **only valid JSON**; no markdown, headings, or commentary.
+#2 Migraine headache
+- IV fluids
+- Antiemetic
+- NSAID or triptan for acute relief
+
+MDM — RULES:
+- One formal paragraph.
+- Describe differential diagnosis, key data reviewed, and reasoning.
+- First sentence MUST begin with:
+  “The patient is a [age]-year-old [sex] with a history of … who presents with …”
+
+DISPOSITION — RULES:
+- One concise line: Admit / Discharge / Observation + brief justification.
+
+BILLING — RULES:
+- Must return exactly one CPT: 99283, 99284, or 99285.
+
+GENERAL RULES:
+- Use concise, formal, clinical language.
+- Do NOT hallucinate diagnoses or findings.
+- Return ONLY valid JSON with the keys specified.
+- No markdown, headings, or explanations outside the JSON.
 """
 
     # Call GPT-4o safely
@@ -997,3 +1215,58 @@ Output a clean, human-readable medication list (plain text, not JSON).
     )
 
     return SummaryResponse(summary=resp.choices[0].message.content.strip())
+
+
+# ─────────────────────────────────────────────────────────────
+# SUBSCRIPTION STATUS ENDPOINT (Web + iOS shared)
+# ─────────────────────────────────────────────────────────────
+
+@app.get("/subscription-status/{uid}")
+async def get_subscription_status(uid: str):
+    """
+    Returns whether the user currently has full Pro access.
+    Logic:
+      - If subscription doc exists and isPro == true → Pro access
+      - Else if today < trialEnds → still in free trial → Pro access
+      - Else → locked
+    """
+
+    doc = db.collection("subscriptions").document(uid).get()
+
+    # Default locked state
+    status = {
+        "isPro": False,
+        "trialActive": False,
+        "hasProAccess": False,
+        "trialEnds": None
+    }
+
+    if not doc.exists:
+        # No subscription record → treat as no access
+        return status
+
+    data = doc.to_dict()
+
+    is_pro = data.get("isPro", False)
+    trial_ends = data.get("trialEnds")
+    trial_active = False
+
+    # Check trial window
+    if trial_ends:
+        try:
+            trial_date = datetime.fromisoformat(trial_ends.replace("Z", "+00:00"))
+            trial_active = datetime.utcnow() < trial_date
+        except Exception:
+            trial_active = False
+
+    # Final logic
+    has_access = is_pro or trial_active
+
+    status.update({
+        "isPro": is_pro,
+        "trialActive": trial_active,
+        "hasProAccess": has_access,
+        "trialEnds": trial_ends
+    })
+
+    return status

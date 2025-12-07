@@ -1,10 +1,22 @@
 fastapi>=0.115.0,<0.120
 uvicorn[standard]>=0.18.0,<1.0
 openai>=1.0.0
+
 firebase-admin>=6.0.0
-pydub>=0.25.1
+google-cloud-firestore>=2.11.0
+google-cloud-storage>=2.14.0
+
+pydantic>=2.4.0,<3.0.0
+
 httpx>=0.27.0
 python-dotenv>=1.0.0
 python-multipart>=0.0.20
+
 gunicorn>=20.1.0
-google-cloud-firestore
+
+aiofiles>=23.1.0
+
+stripe==10.10.0
+
+# Optional (only if still used)
+pydub>=0.25.1
