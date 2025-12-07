@@ -1,27 +1,30 @@
 # main.py — LumoChart Backend (v3.1 optimized)
 # Fast, accurate, and production-ready
 
+
 import os, io, re, uuid, json, asyncio
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal, List
 from enum import Enum
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Form
+from fastapi import (
+    FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request, APIRouter
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+
 from pydantic import BaseModel, Field
-from openai import AsyncOpenAI, RateLimitError, APIError
+
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import storage, firestore
+
 import httpx
+from openai import AsyncOpenAI, RateLimitError, APIError
 
-from typing import List, Literal
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from datetime import datetime
-
-router = APIRouter()
+# Routers
+from subscriptions_main import router as subscriptions_router
 
 # ─────────────────────────────────────────────────────────────
 #  SETUP & INITIALIZATION
@@ -40,23 +43,29 @@ try:
 except ValueError:
     print("⚠️ Firebase already initialized.")
 
-# ✅ Use default Firestore database
 db = firestore.Client(project=PROJECT_ID)
 bucket = storage.bucket()
 
-
-# Initialize OpenAI
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-from subscriptions_main import router as subscriptions_router
-app.include_router(subscriptions_router)
+
+
+# ─────────────────────────────────────────────
+# API VERSIONING
+# ─────────────────────────────────────────────
+
+# Stable production API
+v1 = APIRouter(prefix="/v1")
+
+# Experimental / future API
+v2 = APIRouter(prefix="/v2")
+
+
+app.include_router(subscriptions_router, prefix="")
+
+
 
 
 # ✅ Allowed origins (add both www and non-www)
@@ -313,7 +322,7 @@ async def ai_completion_or_fail(**kwargs):
 # TRANSCRIPTION (Now using Firestore)
 # ─────────────────────────────────────────────────────────────
 
-@app.post("/start-transcription-job")
+@v1.post("/start-transcription-job")
 async def start_transcription_job(request: JobStartRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
     job_ref = db.collection("transcription_jobs").document(job_id)
@@ -357,7 +366,7 @@ async def process_transcription_in_background(job_id: str, file_path: str):
         log_event("ERROR", "transcription_failed", job_id=job_id, error=str(e))
 
 
-@app.get("/get-job-status/{job_id}", response_model=JobStatusResponse)
+@v1.get("/get-job-status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     job_ref = db.collection("transcription_jobs").document(job_id)
     doc = job_ref.get()
@@ -367,7 +376,7 @@ async def get_job_status(job_id: str):
         
     return JobStatusResponse(**doc.to_dict())
 
-@app.post("/transcribe-objective", response_model=TranscriptionResponse)
+@v1.post("/transcribe-objective", response_model=TranscriptionResponse)
 async def transcribe_objective(file: UploadFile = File(...)):
     contents = await file.read()
     buf = io.BytesIO(contents); buf.name = file.filename
@@ -396,7 +405,7 @@ Rules:
    “The patient is a [Age]-year-old male who presents with …” or “The patient presents with …”
 """
 
-@app.post("/generate-structured-note")
+@v1.post("/generate-structured-note")
 async def generate_structured_note(request: SmartCaptureRequest):
     log_event("INFO", "note_generation_start", note_type=request.note_type)
     consolidated, image_tasks = [], []
@@ -521,7 +530,7 @@ Context:
 
 # ---------- HPI Generator Endpoint (Demographics-Aware, Improved) ----------
 
-@app.post("/generate-hpi", response_model=GenerateHPIResponse)
+@v1.post("/generate-hpi", response_model=GenerateHPIResponse)
 async def generate_hpi(req: GenerateHPIRequest) -> GenerateHPIResponse:
     """
     Generate a narrative HPI from structured/context text.
@@ -615,7 +624,7 @@ CONTEXT END
     # --------------------------
     try:
         completion = await client.chat.completions.create(
-            model=os.getenv("OPENAI_HPI_MODEL", "gpt-4.1-mini"),
+            model=os.getenv("OPENAI_HPI_MODEL", "gpt-4o-mini"),
             temperature=0.25,
             max_tokens=600,
             messages=[
@@ -644,7 +653,7 @@ CONTEXT END
 # ─────────────────────────────────────────────────────────────
 # Format HPI
 # ─────────────────────────────────────────────────────────────
-@app.post("/format-hpi", response_model=FormatHPIResponse)
+@v1.post("/format-hpi", response_model=FormatHPIResponse)
 async def format_hpi(req: FormatHPIRequest):
     """
     Rewrites a raw or disorganized HPI into a professional narrative.
@@ -734,9 +743,6 @@ async def format_hpi(req: FormatHPIRequest):
 
 # ─── ED SUMMARY GENERATOR (polished & bullet formatted) ─────────────────────────
 
-from pydantic import BaseModel
-from typing import Optional
-
 class EDSummaryResponse(BaseModel):
     assessment_and_plan: str
     mdm: str
@@ -744,7 +750,7 @@ class EDSummaryResponse(BaseModel):
     billing_level_suggestion: Optional[str] = None
 
 
-@app.post("/generate-ed-summary", response_model=EDSummaryResponse)
+@v1.post("/generate-ed-summary", response_model=EDSummaryResponse)
 async def generate_ed_summary(request: TranscriptionResponse):
     """
     Generates a polished ED Assessment & Plan, MDM, Disposition, and Billing Suggestion
@@ -844,7 +850,7 @@ GENERAL RULES:
 # A&P GENERATOR (v2)
 # ─────────────────────────────────────────────────────────────
 
-@app.post("/generate-ap-v2", response_model=SummaryResponse)
+@v1.post("/generate-ap-v2", response_model=SummaryResponse)
 async def generate_ap_v2(request: GenerateAPV2Request):
     sys_prompt = f"""
 You are an attending physician crafting a problem-based Assessment & Plan.
@@ -867,7 +873,7 @@ Rules:
 # NOTE MERGE
 # ─────────────────────────────────────────────────────────────
 
-@app.post("/merge-note-from-text", response_model=NoteFields)
+@v1.post("/merge-note-from-text", response_model=NoteFields)
 async def merge_note_from_text(request: MergeNoteRequest):
     schema_text = json.dumps(NoteFields.model_json_schema()["properties"], indent=2)
     prompt = f"Merge NEW TEXT into EXISTING NOTE for a {request.note_type} note. Keep original facts unless clearly replaced. Output JSON matching this schema:\n{schema_text}\n\nEXISTING NOTE:\n{json.dumps(request.existing_note, indent=2)}\n---\nNEW TEXT:\n{request.new_text}"
@@ -883,7 +889,7 @@ async def merge_note_from_text(request: MergeNoteRequest):
 
 # ─── PHYSICAL EXAM FORMATTER ─────────────────────────────────────────────────────
 
-@app.post("/format-exam", response_model=SummaryResponse)
+@v1.post("/format-exam", response_model=SummaryResponse)
 async def format_exam(request: TranscriptionResponse):
     """
     Formats a free-text physical exam into a clean, concise, sectioned format,
@@ -939,7 +945,7 @@ Gastrointestinal: Abd soft, NT, ND, +BS
 # FOLLOW-UP RECOMMENDATION GENERATOR
 # ─────────────────────────────────────────────────────────────
 
-@app.post("/generate-follow-up-recommendations", response_model=SummaryResponse)
+@v1.post("/generate-follow-up-recommendations", response_model=SummaryResponse)
 async def generate_follow_up_recommendations(request: GenerateAPV2Request):
     """
     Produces bullet-style follow-up recommendations based on current and past notes.
@@ -963,7 +969,7 @@ async def generate_follow_up_recommendations(request: GenerateAPV2Request):
     return SummaryResponse(summary=resp.choices[0].message.content.strip())
 
 # ─── Discharge Summary ───────────────────────────────────────────────────────
-@app.post("/generate-discharge-summary", response_model=SummaryResponse)
+@v1.post("/generate-discharge-summary", response_model=SummaryResponse)
 async def generate_discharge_summary(request: NotesPayload):
     """
     Generate a polished, structured discharge summary from a list of recent notes.
@@ -1013,7 +1019,7 @@ Requirements:
 
 
 # ─── Hospital Course ──────────────────────────────────────────────────────────
-@app.post("/generate-hospital-summary", response_model=SummaryResponse)
+@v1.post("/generate-hospital-summary", response_model=SummaryResponse)
 async def generate_hospital_summary(request: NotesPayload):
     """
     Generate a polished, structured hospital course summary from a list of notes.
@@ -1061,7 +1067,7 @@ Requirements:
 
 # ─── MDM Generator───────────────────────────────────────────────────────
 
-@app.post("/generate-mdm", response_model=SummaryResponse)
+@v1.post("/generate-mdm", response_model=SummaryResponse)
 async def generate_mdm(request: GenerateMDMRequest):
     """
     Generates a true Medical Decision Making (MDM) section.
@@ -1103,7 +1109,7 @@ Your entire response must be a single block of text.
     return SummaryResponse(summary=resp.choices[0].message.content.strip())
 
 # --- Improving Text ---
-@app.post("/generate-text", response_model=SummaryResponse)
+@v1.post("/generate-text", response_model=SummaryResponse)
 async def generate_text(payload: dict):
     """
     Context-aware text refinement endpoint.
@@ -1167,7 +1173,7 @@ async def generate_text(payload: dict):
 # DRUG SEARCH (RxNav)
 # ─────────────────────────────────────────────────────────────
 
-@app.get("/search-drugs", response_model=DrugSearchResponse)
+@v1.get("/search-drugs", response_model=DrugSearchResponse)
 async def search_drugs(query: str):
     if not query.strip():
         return DrugSearchResponse(results=[])
@@ -1186,7 +1192,7 @@ async def search_drugs(query: str):
 
 # ─── MEDICATION NORMALIZER ───────────────────────────────────────────────────────
 
-@app.post("/normalize-medications", response_model=SummaryResponse)
+@v1.post("/normalize-medications", response_model=SummaryResponse)
 async def normalize_medications(request: TranscriptionResponse):
     """
     Cleans and normalizes medication lists by correcting common transcription errors,
@@ -1221,7 +1227,7 @@ Output a clean, human-readable medication list (plain text, not JSON).
 # SUBSCRIPTION STATUS ENDPOINT (Web + iOS shared)
 # ─────────────────────────────────────────────────────────────
 
-@app.get("/subscription-status/{uid}")
+@v1.get("/subscription-status/{uid}")
 async def get_subscription_status(uid: str):
     """
     Returns whether the user currently has full Pro access.
@@ -1270,3 +1276,26 @@ async def get_subscription_status(uid: str):
     })
 
     return status
+
+
+# ─────────────────────────────────────────────
+# v2 TEST ENDPOINT (staging only)
+# ─────────────────────────────────────────────
+@v2.get("/ping")
+async def ping_v2():
+    return {"message": "v2 online ✔️"}
+
+
+# ─────────────────────────────────────────────
+# Attach versioned routers
+# ─────────────────────────────────────────────
+app.include_router(v1)
+@v1.get("/health")
+async def health_v1():
+    return {"status": "ok", "version": "v1"}
+
+
+app.include_router(v2)
+@v2.get("/health")
+async def health_v2():
+    return {"status": "ok", "version": "v2"}
