@@ -23,6 +23,8 @@ from firebase_admin import storage, firestore
 import httpx
 from openai import AsyncOpenAI, RateLimitError, APIError
 
+from quickcapture import router as quickcapture_router
+
 # Routers
 from subscriptions_main import router as subscriptions_router
 
