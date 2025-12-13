@@ -65,10 +65,6 @@ v1 = APIRouter(prefix="/v1")
 v2 = APIRouter(prefix="/v2")
 
 
-app.include_router(subscriptions_router, prefix="")
-
-
-
 
 # ✅ Allowed origins (add both www and non-www)
 origins = [
@@ -87,6 +83,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(quickcapture_router, prefix="/v1")
 
 # --- ✅ Universal Preflight Handler (Google Cloud Run safe) ---
 from fastapi import Request
@@ -1302,5 +1300,12 @@ async def health_v2():
 # -------------------------------------------------
 # MOUNT ROUTERS (must be last)
 # -------------------------------------------------
+
+# Versioned APIs
 app.include_router(v1)
 app.include_router(v2)
+
+# Feature routers (already versioned)
+app.include_router(quickcapture_router, prefix="/v1")
+app.include_router(subscriptions_router, prefix="/v1")
+
