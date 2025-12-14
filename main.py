@@ -1,7 +1,6 @@
 # main.py — LumoChart Backend (v3.1 optimized)
 # Fast, accurate, and production-ready
 
-
 import os, io, re, uuid, json, asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, Literal, List
@@ -23,13 +22,12 @@ from firebase_admin import storage, firestore
 import httpx
 from openai import AsyncOpenAI, RateLimitError, APIError
 
-from quickcapture import router as quickcapture_router
-
-# Routers
+# ✅ Routers that are known-safe
 from subscriptions_main import router as subscriptions_router
 
+
 # ─────────────────────────────────────────────────────────────
-#  SETUP & INITIALIZATION
+# SETUP & INITIALIZATION
 # ─────────────────────────────────────────────────────────────
 
 load_dotenv()
@@ -38,10 +36,12 @@ PROJECT_ID = os.getenv("GCP_PROJECT_ID", "lumochart-backend")
 BUCKET_NAME = os.getenv("FIREBASE_BUCKET", "lumochart.firebasestorage.app")
 
 try:
-    firebase_admin.initialize_app(options={
-        "storageBucket": BUCKET_NAME,
-        "projectId": PROJECT_ID,
-    })
+    firebase_admin.initialize_app(
+        options={
+            "storageBucket": BUCKET_NAME,
+            "projectId": PROJECT_ID,
+        }
+    )
 except ValueError:
     print("⚠️ Firebase already initialized.")
 
@@ -50,23 +50,22 @@ bucket = storage.bucket()
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# ✅ CREATE APP FIRST (critical)
 app = FastAPI()
-
 
 
 # ─────────────────────────────────────────────
 # API VERSIONING
 # ─────────────────────────────────────────────
 
-# Stable production API
 v1 = APIRouter(prefix="/v1")
-
-# Experimental / future API
 v2 = APIRouter(prefix="/v2")
 
 
+# ─────────────────────────────────────────────
+# CORS
+# ─────────────────────────────────────────────
 
-# ✅ Allowed origins (add both www and non-www)
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -75,7 +74,6 @@ origins = [
     "https://lumosyehealth.com",
 ]
 
-# ✅ Apply CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -84,11 +82,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(quickcapture_router, prefix="/v1")
 
-# --- ✅ Universal Preflight Handler (Google Cloud Run safe) ---
-from fastapi import Request
-from fastapi.responses import Response
+# ─────────────────────────────────────────────
+# ROUTERS
+# ─────────────────────────────────────────────
+
+# Always-safe router
+app.include_router(subscriptions_router)
+
+# 🔒 QuickCapture — lazy load so it can NEVER crash startup
+try:
+    from quickcapture import router as quickcapture_router
+    app.include_router(quickcapture_router)
+    print("✅ QuickCapture router loaded")
+except Exception as e:
+    print("❌ QuickCapture failed to load:", e)
+
+
+# ─────────────────────────────────────────────
+# UNIVERSAL PREFLIGHT (Cloud Run safe)
+# ─────────────────────────────────────────────
 
 @app.options("/{rest_of_path:path}")
 async def universal_preflight(request: Request, rest_of_path: str):
