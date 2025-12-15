@@ -90,14 +90,6 @@ app.add_middleware(
 # Always-safe router
 app.include_router(subscriptions_router)
 
-# 🔒 QuickCapture — lazy load so it can NEVER crash startup
-try:
-    from quickcapture import router as quickcapture_router
-    app.include_router(quickcapture_router)
-    print("✅ QuickCapture router loaded")
-except Exception as e:
-    print("❌ QuickCapture failed to load:", e)
-
 
 # ─────────────────────────────────────────────
 # UNIVERSAL PREFLIGHT (Cloud Run safe)
@@ -1319,6 +1311,5 @@ app.include_router(v1)
 app.include_router(v2)
 
 # Feature routers (already versioned)
-app.include_router(quickcapture_router, prefix="/v1")
 app.include_router(subscriptions_router, prefix="/v1")
 
