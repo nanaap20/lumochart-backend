@@ -45,7 +45,7 @@ try:
 except ValueError:
     print("⚠️ Firebase already initialized.")
 
-db = firestore.Client(project=PROJECT_ID)
+db = firestore.client() 
 bucket = storage.bucket()
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
