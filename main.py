@@ -32,7 +32,7 @@ from subscriptions_main import router as subscriptions_router
 
 load_dotenv()
 
-PROJECT_ID = os.getenv("GCP_PROJECT_ID", "lumochart-backend")
+PROJECT_ID = os.getenv("GCP_PROJECT_ID", "lumochart-backend-prod")
 BUCKET_NAME = os.getenv("FIREBASE_BUCKET", "lumochart.firebasestorage.app")
 
 try:
