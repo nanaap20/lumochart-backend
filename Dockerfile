@@ -24,4 +24,4 @@ COPY . .
 EXPOSE 8080
 
 # Gunicorn gracefully handles multiple uvicorn workers
-CMD ["sh", "-c", "gunicorn -w 2 -k uvicorn.workers.UvicornWorker --timeout 120 --bind 0.0.0.0:$PORT main:app"]
+CMD ["sh", "-c", "gunicorn -w 2 -k uvicorn.workers.UvicornWorker --timeout 600 --bind 0.0.0.0:$PORT main:app"]

@@ -3,8 +3,6 @@ uvicorn[standard]>=0.18.0,<1.0
 openai>=1.0.0
 
 firebase-admin>=6.0.0
-google-cloud-firestore>=2.11.0
-google-cloud-storage>=2.14.0
 
 pydantic>=2.4.0,<3.0.0
 

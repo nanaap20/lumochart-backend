@@ -329,19 +329,31 @@ async def ai_completion_or_fail(**kwargs):
 
 @v1.post("/start-transcription-job")
 async def start_transcription_job(request: JobStartRequest, background_tasks: BackgroundTasks):
-    job_id = str(uuid.uuid4())
-    job_ref = db.collection("transcription_jobs").document(job_id)
+    print(f"🚀 Received transcription request for: {request.file_path}")
     
-    # Create the job document in Firestore
-    job_ref.set({
-        "status": "queued",
-        "message": "Job received",
-        "transcript": None,
-        "createdAt": firestore.SERVER_TIMESTAMP
-    })
-    
-    background_tasks.add_task(process_transcription_in_background, job_id, request.file_path)
-    return {"status": "processing", "job_id": job_id}
+    try:
+        # 1. Generate ID
+        job_id = str(uuid.uuid4())
+        
+        # 2. Test DB Access (This is where it usually crashes)
+        job_ref = db.collection("transcription_jobs").document(job_id)
+        
+        # 3. Write initial status
+        job_ref.set({
+            "status": "queued",
+            "message": "Job received",
+            "transcript": None,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        })
+        
+        background_tasks.add_task(process_transcription_in_background, job_id, request.file_path)
+        return {"status": "processing", "job_id": job_id}
+
+    except Exception as e:
+        # 🔥 Catch the crash and show the real reason
+        error_msg = f"CRITICAL BACKEND ERROR: {str(e)}"
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 async def process_transcription_in_background(job_id: str, file_path: str):
